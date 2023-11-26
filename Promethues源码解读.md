@@ -10,7 +10,7 @@
 
 
 
-![image-20231126173602851](C:\Users\王浩宇\Pictures\image-20231126173602851.png)
+![image-20231126173602851](https://raw.githubusercontent.com/prometheus/prometheus/965e603fa792bca0900ac76eb45ae84c81af1cdf/documentation/images/architecture.svg)
 
 可以看出来这个系统从我们写的定时任务/job 以及自己本身的服务器上拿到日志数据后，在自己的的服务器/服务节点上存储。由于有不同的节点，就需要有相关查询的路由索引（Retrival)，比如k8s的注册中心，或者干脆由dns导航等等，然后存储在硬盘中。需要时可使用自定义的索引语句promQL检索，将结果输出给下游的UI （比如我们常用的监控大盘Grafana 做显示)   
 
