@@ -283,6 +283,7 @@
     │  unittest.go
     │  unittest_test.go
 
+</code></pre></details>
 可以看出程序的切入口在main.go里面， 而tool里面多半是封装的方法与命令行参数的补充
 
 首先我们可以看到他定义一些全局变量变量
