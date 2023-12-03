@@ -482,4 +482,218 @@ func main() {
 
 ```
 
-main函数我们后面细节的看逻辑，粗略来说就干了这几件事：定义了一个运行参数cfg,  然后从命令提示符运行参数里面拿对应的参数（a.flag) 之后走一些具体初始化逻辑判断后，把各个重要的组件启动起来（g.add, g.run)  再看这些组件具体的逻辑之前，我们先来扫盲一下main文件中其他的一些重要函数（下周继续)
+main函数我们后面细节的看逻辑，粗略来说就干了这几件事：定义了一个运行参数cfg,  然后从命令提示符运行参数里面拿对应的参数（a.flag) 之后走一些具体初始化逻辑判断后，把各个重要的组件启动起来（g.add, g.run)  再看这些组件具体的逻辑之前，我们先来扫盲一下main文件中其他的一些重要函数
+
+关于上面设置的依托参数。我们直接看官方文档。不必过度纠结写在代码里的配置是什么意思 （[路径是docs/command-line/promethues.md]([prometheus/docs/command-line/prometheus.md at main · prometheus/prometheus (github.com)](https://github.com/prometheus/prometheus/blob/main/docs/command-line/prometheus.md))
+
+粗略的看一下拿到参数后解析参数main函数干了哪些事：
+
+* 有两种模式 server-mode和agent-mode 水火不容，看配置falg有没有混用
+
+* 拿本地存储地址 storage path
+
+* CORS参数解析
+
+* 拿config file并解析 可以参考[官网]()[Configuration | Prometheus](https://prometheus.io/docs/prometheus/latest/configuration/configuration/)说明：
+
+  * 解析scrape config部分：
+
+    ```go
+    type ScrapeConfig struct {
+    	JobName string `yaml:"job_name"`
+    	HonorLabels bool `yaml:"honor_labels,omitempty"`
+    	HonorTimestamps bool `yaml:"honor_timestamps"`
+    	TrackTimestampsStaleness bool `yaml:"track_timestamps_staleness"`
+    	Params url.Values `yaml:"params,omitempty"`
+    	ScrapeInterval model.Duration `yaml:"scrape_interval,omitempty"`
+    	ScrapeTimeout model.Duration `yaml:"scrape_timeout,omitempty"`
+    	ScrapeProtocols []ScrapeProtocol `yaml:"scrape_protocols,omitempty"`
+    	// 感兴趣的话自己能够楼轻松的翻到这个代码的，不过多演示    
+    	......
+    }
+    ```
+
+    它可以从我们最上层的yaml获得，也可以从子文件获得
+
+    ```go
+    func (c *Config) GetScrapeConfigs() ([]*ScrapeConfig, error) {
+    	scfgs := make([]*ScrapeConfig, len(c.ScrapeConfigs))
+    
+    	jobNames := map[string]string{}
+        // 从主文件
+    	for i, scfg := range c.ScrapeConfigs {
+    		if err := scfg.Validate(c.GlobalConfig); err != nil {
+    			return nil, err
+    		}
+    		// 去重
+    		if _, ok := jobNames[scfg.JobName]; ok {
+    			return nil, fmt.Errorf("found multiple scrape configs with job name %q", scfg.JobName)
+    		}
+    		jobNames[scfg.JobName] = "main config file"
+    		scfgs[i] = scfg
+    	}
+        //从子文件
+    	for _, pat := range c.ScrapeConfigFiles {
+    		fs, err := filepath.Glob(pat)
+    		for _, filename := range fs {
+    			cfg := ScrapeConfigs{}
+    			content, err := os.ReadFile(filename)
+    			if err != nil {
+    				return nil, fileErr(filename, err)
+    			}
+    			for _, scfg := range cfg.ScrapeConfigs {
+                    // 省略了几乎一样的判断逻辑......
+    				scfg.SetDirectory(filepath.Dir(filename))
+    				scfgs = append(scfgs, scfg)
+    			}
+    		}
+    	}
+    	return scfgs, nil
+    }
+    ```
+
+  * [exemplar-storage]([Grafana 系列文章（十五）：Exemplars-CSDN博客](https://blog.csdn.net/east4ming/article/details/128992977?ops_request_misc=%7B%22request%5Fid%22%3A%22170159844016800188575221%22%2C%22scm%22%3A%2220140713.130102334..%22%7D&request_id=170159844016800188575221&biz_id=0&utm_medium=distribute.pc_search_result.none-task-blog-2~all~sobaiduend~default-1-128992977-null-null.142^v96^pc_search_result_base5&utm_term=Exemplars&spm=1018.2226.3001.4187))  另一种更支持的数据存储类型。 对于初学者，包括我来说是一个很抽象的概念。但是却又显得很合理
+
+    举个例子。我们通过Metric能收获每个接口最终的结果是200还是404，但是我们不再意，也没办法直接后去这次响应所需的时间。exemplar对每次响应的trace_ID进行追踪，从而可以获取到每次响应的时间。（[来源：文心一言的解释](叮！快来看看我和文心一言的奇妙对话～点击链接 https://yiyan.baidu.com/share/wZG9uAeLw7 -- 文心一言，既能写文案、读文档，又能绘画聊天、写诗做表，你的全能伙伴！))
+
+    在代码中，我们可以配置他的存储空间大小  MaxExemplars.他说是一块环形存储的buff. 但是具体我们要往后面看
+
+    这个量也用于Histogram中。[我们可以先简单看一下啥是Histogram]([一文搞懂 Prometheus 的直方图 - 知乎 (zhihu.com)](https://zhuanlan.zhihu.com/p/76904793))
+
+    todo: 后面详细看一下Exemplars 
+
+    ```go
+    type ExemplarsConfig struct {
+    	// MaxExemplars sets the size, in # of exemplars stored, of the single circular buffer used to store exemplars in memory.
+    	// Use a value of 0 or less than 0 to disable the storage without having to restart Prometheus.
+    	MaxExemplars int64 `yaml:"max_exemplars,omitempty"`
+    }
+    ```
+
+  * 坑点一 ： OutofOrderTimeWindow  跳过
+
+  * 设置tsdb的存储时间（RetentionDuration）和大小（MaxBlockDuration）
+
+  * 告警时间设置 noStepSubqueryInterval.Set(config.DefaultGlobalConfig.EvaluationInterval)  默认1min
+
+* 资源初始化
+
+  * 本地存储 localstorage
+
+    * ReadyScrapeManager 监听任务Manager的上层struct
+
+    在后面本地存储完成了赋值
+
+    ```go
+    db, err := openDBWithMetrics(localStoragePath, logger, prometheus.DefaultRegisterer, &opts, localStorage.getStats())
+    func openDBWithMetrics(dir string, logger log.Logger, reg prometheus.Registerer, opts *tsdb.Options, stats *tsdb.DBStats) (*tsdb.DB, error) {
+    	db, err := tsdb.Open(
+    		dir,
+    		log.With(logger, "component", "tsdb"),
+    		reg,
+    		opts,
+    		stats,
+    	)
+    	reg.MustRegister(
+    		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+    		//......
+    	)
+    	return db, nil
+    }
+    
+    startTimeMargin := int64(2 * time.Duration(cfg.tsdb.MinBlockDuration).Seconds() * 1000)
+    localStorage.Set(db, startTimeMargin)
+    ```
+
+    重点来了，这里的tsdb.open函数 是我们所有存储操作的总入口与方法，这一段是一定要精读的
+
+    (这么精彩的部分我们留到下棋再看吧 拜拜)
+
+  * 远程存储 Remote storage  : write storage 
+
+    ```go
+    type Storage struct {
+        logger *logging.Deduper
+    	mtx    sync.Mutex
+    	rws *WriteStorage
+    	queryables             []storage.SampleAndChunkQueryable
+    	// 本地loacalstorage startime的callback
+    	localStartTimeCallback startTimeCallback
+    }
+    
+    type WriteStorage struct {
+    	logger log.Logger
+    	
+    	mtx    sync.Mutex
+        // 这三个由我们传过去的default register 赋值
+        reg    prometheus.Registerer
+    	watcherMetrics    *wlog.WatcherMetrics
+    	liveReaderMetrics *wlog.LiveReaderMetrics
+    	externalLabels    labels.Labels
+    	// 传过去的存储路径    
+    	dir               string
+    	queues            map[string]*QueueManager
+    	samplesIn         *ewmaRate
+    	flushDeadline     time.Duration
+    	interner          *pool
+        // 传过去的 ReadyScrapeManager
+    	scraper           ReadyScrapeManager
+    	quit              chan struct{}
+    	// For timestampTracker. 这个是一个Guage类型， 并被注册在reg中（为啥注册这个我也不清楚）
+    	highestTimestamp *maxTimestamp
+    }
+    
+    highestTimestamp: &maxTimestamp{
+    	Gauge: prometheus.NewGauge(prometheus.GaugeOpts{
+    		Namespace: namespace,
+    		Subsystem: subsystem,
+    		Name:      "highest_timestamp_in_seconds",
+    		Help:      "Highest timestamp that has come into the remote storage via the Appender interface, in seconds since epoch.",
+    	}),
+    }
+    if reg != nil {
+    	reg.MustRegister(rws.highestTimestamp)
+    }
+    
+    // 然后这个远程存储就开始运行起来了
+    func (rws *WriteStorage) run() {
+    	ticker := time.NewTicker(shardUpdateDuration)   // 这里是10s的定时器
+    	defer ticker.Stop()
+    	for {
+    		select {
+    		case <-ticker.C:
+    			rws.samplesIn.tick()
+    		case <-rws.quit:
+    			return
+    		}
+    	}
+    }
+    
+    func (r *ewmaRate) tick() {
+        // 周期的刷新为0
+    	newEvents := r.newEvents.Swap(0)
+        // 记录变化率， 10s维度
+    	instantRate := float64(newEvents) / r.interval.Seconds()
+    
+    	r.mutex.Lock()
+    	defer r.mutex.Unlock()
+    
+    	switch {
+    	case r.init:
+            // 指数加权移动平均  r.alpha = ewmaWeight （削弱因子）
+    		r.lastRate += r.alpha * (instantRate - r.lastRate)
+    	case newEvents > 0:
+    		r.init = true
+    		r.lastRate = instantRate
+    	}
+    }
+    
+    func (r *ewmaRate) incr(incr int64) {
+    	r.newEvents.Add(incr)
+    }
+    
+    go rws.run()
+    return rws
+    ```
+
+  * 存储总接口 FanoutStorage  同时接受了 LocalStorage 和 RemoteStorage 相当于存储的的封装
